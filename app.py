@@ -188,6 +188,10 @@ if calcular:
 
         with col1:
             st.subheader("Resultados")
+            # Calcular el total de intereses pagados
+            total_pagado = -df_flujo.loc[df_flujo['Periodo'] > 0, 'Flujo'].sum()
+            total_intereses = total_pagado - monto_prestamo
+
             try:
                 # Calcular TIR periódica y anualizarla
                 tir_periodica = npf.irr(df_flujo["Flujo"].values)
@@ -200,6 +204,11 @@ if calcular:
                     st.metric(
                         label=f"TIR Efectiva Anual ({pagos_por_ano} pagos/año)",
                         value=f"{tir_anual:.2%}"
+                    )
+                    st.metric(
+                        label="Total Intereses Pagados",
+                        value=f"${total_intereses:,.2f}",
+                        help="Suma de todas las cuotas y abonos menos el monto del préstamo inicial. Un abono extraordinario debería reducir este valor."
                     )
                     st.info(f"La TIR periódica (base para el cálculo) es de {tir_periodica:.4%}.")
 
@@ -234,3 +243,4 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("Creado por ASTREO - Gustavo Llano.")
+
