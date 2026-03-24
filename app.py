@@ -5,7 +5,7 @@ import plotly.express as px
 
 # --- Funciones de Cálculo ---
 
-def generar_flujo_caja(
+def calcular_escenarios_flujo(
     monto_prestamo,
     duracion_anos,
     cuota_mensual,
@@ -15,39 +15,58 @@ def generar_flujo_caja(
     abonos_extraordinarios,
 ):
     """
-    Genera un DataFrame con el flujo de caja realista de un préstamo, simulando
-    la amortización y el efecto de los abonos extraordinarios en la duración.
+    Genera dos DataFrames de flujo de caja:
+    1. Un flujo "ingenuo" para el cálculo de la TIR, que asume la duración completa.
+    2. Un flujo "realista" que simula la amortización para calcular intereses reales.
 
     Args:
         (Todos los argumentos de la función original)
 
     Returns:
-        pd.DataFrame: DataFrame con las columnas 'Periodo' y 'Flujo', o None si la tasa
-                      base no puede ser calculada.
+        tuple: (pd.DataFrame, pd.DataFrame) para el flujo de TIR y el flujo realista.
+               El segundo elemento puede ser None si la tasa base no es válida.
     """
-    # 1. Calcular la tasa periódica implícita del crédito SIN abonos.
-    flujo_base = [monto_prestamo]
     total_periodos_original = int(round(duracion_anos * pagos_por_ano))
-    for p in range(1, total_periodos_original + 1):
-        ano_actual = (p - 1) / pagos_por_ano + 1
+
+    # --- Escenario 1: Flujo "Ingenuo" para cálculo de TIR ---
+    # Asume duración completa y simplemente suma los abonos.
+    # Esto es para que la TIR refleje el "costo" de hacer pagos anticipados.
+    flujos_para_tir = [0.0] * (total_periodos_original + 1)
+    flujos_para_tir[0] = monto_prestamo
+    cuotas_base_sin_abono = []
+
+    for periodo in range(1, total_periodos_original + 1):
+        ano_actual = (periodo - 1) / pagos_por_ano + 1
         if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
             anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
             cuota_ajustada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
         else:
             cuota_ajustada = cuota_mensual
-        flujo_base.append(-cuota_ajustada)
+        
+        flujos_para_tir[periodo] = -cuota_ajustada
+        cuotas_base_sin_abono.append(-cuota_ajustada)
 
+    for periodo_abono, monto_abono in abonos_extraordinarios:
+        if 0 < periodo_abono <= total_periodos_original:
+            flujos_para_tir[periodo_abono] -= monto_abono
+
+    df_flujo_para_tir = pd.DataFrame({
+        "Periodo": range(total_periodos_original + 1),
+        "Flujo": flujos_para_tir,
+    })
+
+    # --- Escenario 2: Flujo "Realista" para cálculo de Intereses y visualización ---
+    flujo_base = [monto_prestamo] + cuotas_base_sin_abono
     tasa_periodica = npf.irr(flujo_base)
 
     if pd.isna(tasa_periodica) or tasa_periodica < 0:
-        return None # Señal de error si la tasa no es válida
+        return df_flujo_para_tir, None
 
-    # 2. Simular la amortización real, período por período, con abonos.
-    flujos = [monto_prestamo]
+    flujos_realista = [monto_prestamo]
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
 
-    for periodo in range(1, total_periodos_original + 2): # +1 para el pago final
+    for periodo in range(1, total_periodos_original + 2):
         if saldo_capital < 0.01:
             break
 
@@ -65,15 +84,16 @@ def generar_flujo_caja(
         if (saldo_capital + interes_periodo) < pago_total_del_periodo:
             pago_total_del_periodo = saldo_capital + interes_periodo
 
-        flujos.append(-pago_total_del_periodo)
+        flujos_realista.append(-pago_total_del_periodo)
         abono_a_capital = pago_total_del_periodo - interes_periodo
         saldo_capital -= abono_a_capital
 
-    df_flujo = pd.DataFrame({
-        "Periodo": range(len(flujos)),
-        "Flujo": flujos,
+    df_flujo_realista = pd.DataFrame({
+        "Periodo": range(len(flujos_realista)),
+        "Flujo": flujos_realista,
     })
-    return df_flujo
+    
+    return df_flujo_para_tir, df_flujo_realista
 
 # --- Interfaz de Usuario con Streamlit ---
 
@@ -183,8 +203,8 @@ if calcular:
                 st.error("El formato de los abonos extraordinarios no es válido. Use 'periodo, monto' por línea.")
                 st.stop()
         
-        # Generar y mostrar el flujo de caja
-        df_flujo = generar_flujo_caja(
+        # Generar los dos escenarios de flujo de caja
+        df_flujo_tir, df_flujo_realista = calcular_escenarios_flujo(
             monto_prestamo,
             duracion_anos,
             cuota_mensual,
@@ -194,7 +214,7 @@ if calcular:
             abonos_extraordinarios
         )
 
-        if df_flujo is None:
+        if df_flujo_realista is None:
             st.error("No se pudo calcular la tasa de interés implícita del préstamo. Verifique que las cuotas sean suficientes para pagar el crédito o que los parámetros sean consistentes.")
             st.stop()
 
@@ -202,13 +222,13 @@ if calcular:
 
         with col1:
             st.subheader("Resultados")
-            # Calcular el total de intereses pagados
-            total_pagado = -df_flujo.loc[df_flujo['Periodo'] > 0, 'Flujo'].sum()
+            # Calcular el total de intereses pagados desde el flujo realista
+            total_pagado = -df_flujo_realista.loc[df_flujo_realista['Periodo'] > 0, 'Flujo'].sum()
             total_intereses = total_pagado - monto_prestamo
 
             try:
-                # Calcular TIR periódica y anualizarla
-                tir_periodica = npf.irr(df_flujo["Flujo"].values)
+                # Calcular TIR desde el flujo "ingenuo" para que refleje el costo del abono
+                tir_periodica = npf.irr(df_flujo_tir["Flujo"].values)
                 if pd.isna(tir_periodica) or abs(tir_periodica) == float('inf'):
                      st.warning("No se pudo calcular la TIR. Revise si el flujo de caja tiene cambios de signo.")
                 else:
@@ -230,13 +250,13 @@ if calcular:
                 st.warning(f"No se pudo calcular la TIR. Es posible que el flujo de caja no cambie de signo, lo que indica que la inversión nunca genera retornos positivos o siempre es rentable. Error: {e}")
 
             st.subheader("Flujo de Caja Detallado")
-            st.dataframe(df_flujo, height=400)
+            st.dataframe(df_flujo_realista, height=400)
 
         with col2:
             st.subheader("Gráfico del Flujo de Caja")
             # Crear gráfico de barras con Plotly
             fig = px.bar(
-                df_flujo,
+                df_flujo_realista,
                 x="Periodo",
                 y="Flujo",
                 title="Evolución del Flujo de Caja a lo Largo del Tiempo",
