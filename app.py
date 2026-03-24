@@ -233,4 +233,4 @@ else:
     st.info("Configure los parámetros en la barra lateral y presione 'Calcular TIR' para ver los resultados.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Creado por un asistente de IA.")
+st.sidebar.markdown("Creado por ASTREO - Gustavo Llano.")
