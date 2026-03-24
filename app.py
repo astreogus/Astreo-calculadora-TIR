@@ -15,52 +15,62 @@ def generar_flujo_caja(
     abonos_extraordinarios,
 ):
     """
-    Genera un DataFrame con el flujo de caja periódico de una inversión o préstamo.
+    Genera un DataFrame con el flujo de caja realista de un préstamo, simulando
+    la amortización y el efecto de los abonos extraordinarios en la duración.
 
     Args:
-        monto_prestamo (float): Monto inicial del préstamo (flujo positivo para el prestatario).
-        duracion_anos (float): Duración total del préstamo en años.
-        cuota_mensual (float): Valor de la cuota mensual base (sin ajustes).
-        incremento_ipc_anual (float): Porcentaje de incremento anual por IPC (ej: 0.05 para 5%).
-        anos_gracia_ipc (int): Número de años sin ajuste por IPC.
-        pagos_por_ano (int): Frecuencia de los pagos/cuotas en un año.
-        abonos_extraordinarios (list): Lista de tuplas (periodo, monto) para abonos a capital.
+        (Todos los argumentos de la función original)
 
     Returns:
-        pd.DataFrame: DataFrame con las columnas 'Periodo' y 'Flujo'.
+        pd.DataFrame: DataFrame con las columnas 'Periodo' y 'Flujo', o None si la tasa
+                      base no puede ser calculada.
     """
-    total_periodos = int(round(duracion_anos * pagos_por_ano))
-    flujos = [0] * (total_periodos + 1)
-    
-    # Periodo 0: Desembolso del préstamo (flujo de entrada positivo)
-    flujos[0] = monto_prestamo
-
-    cuota_actual = cuota_mensual
-
-    for periodo in range(1, total_periodos + 1):
-        # Determinar el año actual basado en el período y la frecuencia de pagos
-        ano_actual = (periodo - 1) / pagos_por_ano + 1
-
-        # Aplicar incremento IPC si ha pasado el período de gracia
+    # 1. Calcular la tasa periódica implícita del crédito SIN abonos.
+    flujo_base = [monto_prestamo]
+    total_periodos_original = int(round(duracion_anos * pagos_por_ano))
+    for p in range(1, total_periodos_original + 1):
+        ano_actual = (p - 1) / pagos_por_ano + 1
         if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
-            # El ajuste se calcula basado en los años completos transcurridos desde el fin del período de gracia
             anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
-            
-            # Recalcular la cuota ajustada desde la base
             cuota_ajustada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
         else:
             cuota_ajustada = cuota_mensual
+        flujo_base.append(-cuota_ajustada)
 
-        # El pago de la cuota es un flujo de salida (negativo)
-        flujos[periodo] = -cuota_ajustada
+    tasa_periodica = npf.irr(flujo_base)
 
-    # Añadir abonos extraordinarios (flujos de salida negativos)
-    for periodo_abono, monto_abono in abonos_extraordinarios:
-        if 0 < periodo_abono <= total_periodos:
-            flujos[periodo_abono] -= monto_abono
+    if pd.isna(tasa_periodica) or tasa_periodica < 0:
+        return None # Señal de error si la tasa no es válida
+
+    # 2. Simular la amortización real, período por período, con abonos.
+    flujos = [monto_prestamo]
+    saldo_capital = monto_prestamo
+    abonos_dict = dict(abonos_extraordinarios)
+
+    for periodo in range(1, total_periodos_original + 2): # +1 para el pago final
+        if saldo_capital < 0.01:
+            break
+
+        interes_periodo = saldo_capital * tasa_periodica
+
+        ano_actual = (periodo - 1) / pagos_por_ano + 1
+        cuota_programada = cuota_mensual
+        if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
+            anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
+            cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
+
+        abono_extra = abonos_dict.get(periodo, 0)
+        pago_total_del_periodo = cuota_programada + abono_extra
+
+        if (saldo_capital + interes_periodo) < pago_total_del_periodo:
+            pago_total_del_periodo = saldo_capital + interes_periodo
+
+        flujos.append(-pago_total_del_periodo)
+        abono_a_capital = pago_total_del_periodo - interes_periodo
+        saldo_capital -= abono_a_capital
 
     df_flujo = pd.DataFrame({
-        "Periodo": range(total_periodos + 1),
+        "Periodo": range(len(flujos)),
         "Flujo": flujos,
     })
     return df_flujo
@@ -184,6 +194,10 @@ if calcular:
             abonos_extraordinarios
         )
 
+        if df_flujo is None:
+            st.error("No se pudo calcular la tasa de interés implícita del préstamo. Verifique que las cuotas sean suficientes para pagar el crédito o que los parámetros sean consistentes.")
+            st.stop()
+
         col1, col2 = st.columns([1, 2])
 
         with col1:
@@ -243,4 +257,3 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("Creado por ASTREO - Gustavo Llano.")
-
