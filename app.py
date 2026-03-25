@@ -13,6 +13,8 @@ def calcular_escenarios_flujo(
     anos_gracia_ipc,
     pagos_por_ano,
     abonos_extraordinarios,
+    cuotas_diferentes,
+    cuotas_porcentaje,
 ):
     """
     Genera dos DataFrames de flujo de caja:
@@ -23,7 +25,7 @@ def calcular_escenarios_flujo(
         (Todos los argumentos de la función original)
 
     Returns:
-        tuple: (pd.DataFrame, pd.DataFrame) para el flujo de TIR y el flujo realista.
+        tuple: (pd.DataFrame, pd.DataFrame) para el flujo de TIR y el flujo realista. 
                El segundo elemento puede ser None si la tasa base no es válida.
     """
     total_periodos_original = int(round(duracion_anos * pagos_por_ano))
@@ -36,15 +38,26 @@ def calcular_escenarios_flujo(
     cuotas_base_sin_abono = []
 
     for periodo in range(1, total_periodos_original + 1):
+        # Calcula la cuota estándar con ajuste IPC para este período
         ano_actual = (periodo - 1) / pagos_por_ano + 1
         if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
             anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
-            cuota_ajustada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
+            cuota_estandar_periodo = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
         else:
-            cuota_ajustada = cuota_mensual
-        
-        flujos_para_tir[periodo] = -cuota_ajustada
-        cuotas_base_sin_abono.append(-cuota_ajustada)
+            cuota_estandar_periodo = cuota_mensual
+
+        # Esta lista se usa para calcular la tasa de interés implícita, no debe incluir modificaciones
+        cuotas_base_sin_abono.append(-cuota_estandar_periodo)
+
+        # Determina la cuota final para el flujo de la TIR, aplicando modificaciones
+        if periodo in cuotas_diferentes:
+            cuota_final_periodo = cuotas_diferentes[periodo]
+        elif periodo in cuotas_porcentaje:
+            porcentaje = cuotas_porcentaje[periodo]
+            cuota_final_periodo = cuota_mensual * (porcentaje / 100.0)
+        else:
+            cuota_final_periodo = cuota_estandar_periodo
+        flujos_para_tir[periodo] = -cuota_final_periodo
 
     for periodo_abono, monto_abono in abonos_extraordinarios:
         if 0 < periodo_abono <= total_periodos_original:
@@ -72,12 +85,19 @@ def calcular_escenarios_flujo(
 
         interes_periodo = saldo_capital * tasa_periodica
 
-        ano_actual = (periodo - 1) / pagos_por_ano + 1
-        cuota_programada = cuota_mensual
-        if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
-            anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
-            cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
-
+        # Determina la cuota programada para la simulación realista
+        if periodo in cuotas_diferentes:
+            cuota_programada = cuotas_diferentes[periodo]
+        elif periodo in cuotas_porcentaje:
+            porcentaje = cuotas_porcentaje[periodo]
+            cuota_programada = cuota_mensual * (porcentaje / 100.0)
+        else:
+            ano_actual = (periodo - 1) / pagos_por_ano + 1
+            if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
+                anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
+                cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
+            else:
+                cuota_programada = cuota_mensual
         abono_extra = abonos_dict.get(periodo, 0)
         pago_total_del_periodo = cuota_programada + abono_extra
 
@@ -169,6 +189,22 @@ anos_gracia_ipc = st.sidebar.number_input(
 
 st.sidebar.markdown("---")
 
+st.sidebar.subheader("Modificaciones de Cuota (Opcional)")
+
+cuotas_diferentes_str = st.sidebar.text_area(
+    "Valor de Cuota Específico",
+    height=100,
+    help="Para meses específicos, reemplace la cuota por un valor absoluto. Formato: 'periodo, monto'. Ejemplo: 24, 1500"
+)
+
+cuotas_porcentaje_str = st.sidebar.text_area(
+    "Cuota como Porcentaje de la Base (%)",
+    height=100,
+    help="Para meses específicos, calcule la cuota como un % de la cuota base. Formato: 'periodo, porcentaje'. Ejemplo: 48, 120 (para el 120%)"
+)
+
+st.sidebar.markdown("---")
+
 abonos_extraordinarios_str = st.sidebar.text_area(
     "Abonos Extraordinarios (opcional)",
     value=abonos_extra_default,
@@ -202,6 +238,34 @@ if calcular:
             except (ValueError, IndexError):
                 st.error("El formato de los abonos extraordinarios no es válido. Use 'periodo, monto' por línea.")
                 st.stop()
+
+        # Parseo de cuotas con valor diferente
+        cuotas_diferentes = {}
+        if cuotas_diferentes_str.strip():
+            try:
+                lineas = cuotas_diferentes_str.strip().splitlines()
+                for linea in lineas:
+                    partes = linea.split(',')
+                    periodo = int(partes[0].strip())
+                    monto = float(partes[1].strip())
+                    cuotas_diferentes[periodo] = monto
+            except (ValueError, IndexError):
+                st.error("El formato de 'Valor de Cuota Específico' no es válido. Use 'periodo, monto'.")
+                st.stop()
+
+        # Parseo de cuotas por porcentaje
+        cuotas_porcentaje = {}
+        if cuotas_porcentaje_str.strip():
+            try:
+                lineas = cuotas_porcentaje_str.strip().splitlines()
+                for linea in lineas:
+                    partes = linea.split(',')
+                    periodo = int(partes[0].strip())
+                    porcentaje = float(partes[1].strip())
+                    cuotas_porcentaje[periodo] = porcentaje
+            except (ValueError, IndexError):
+                st.error("El formato de 'Cuota como Porcentaje' no es válido. Use 'periodo, porcentaje'.")
+                st.stop()
         
         # Generar los dos escenarios de flujo de caja
         df_flujo_tir, df_flujo_realista = calcular_escenarios_flujo(
@@ -211,7 +275,9 @@ if calcular:
             incremento_ipc_anual,
             anos_gracia_ipc,
             pagos_por_ano,
-            abonos_extraordinarios
+            abonos_extraordinarios,
+            cuotas_diferentes,
+            cuotas_porcentaje
         )
 
         if df_flujo_realista is None:
@@ -277,3 +343,4 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("Creado por ASTREO - Gustavo Llano.")
+
