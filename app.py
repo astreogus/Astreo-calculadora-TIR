@@ -25,8 +25,9 @@ def calcular_escenarios_flujo(
         (Todos los argumentos de la función original)
 
     Returns:
-        tuple: (pd.DataFrame, pd.DataFrame) para el flujo de TIR y el flujo realista. 
-               El segundo elemento puede ser None si la tasa base no es válida.
+        tuple: (pd.DataFrame, pd.DataFrame, float) para el flujo de TIR, 
+               la tabla de amortización realista, y la tasa de interés periódica del préstamo.
+               El segundo y tercer elemento pueden ser None si la tasa base no es válida.
     """
     total_periodos_original = int(round(duracion_anos * pagos_por_ano))
 
@@ -73,9 +74,9 @@ def calcular_escenarios_flujo(
     tasa_periodica = npf.irr(flujo_base)
 
     if pd.isna(tasa_periodica) or tasa_periodica < 0:
-        return df_flujo_para_tir, None
+        return df_flujo_para_tir, None, None
 
-    flujos_realista = [monto_prestamo]
+    tabla_amortizacion = []
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
 
@@ -83,37 +84,45 @@ def calcular_escenarios_flujo(
         if saldo_capital < 0.01:
             break
 
+        saldo_inicial_periodo = saldo_capital
         interes_periodo = saldo_capital * tasa_periodica
 
         # Determina la cuota programada para la simulación realista
+        ano_actual = (periodo - 1) / pagos_por_ano + 1
         if periodo in cuotas_diferentes:
             cuota_programada = cuotas_diferentes[periodo]
         elif periodo in cuotas_porcentaje:
             porcentaje = cuotas_porcentaje[periodo]
             cuota_programada = cuota_mensual * (porcentaje / 100.0)
+        elif ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
+            anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
+            cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
         else:
-            ano_actual = (periodo - 1) / pagos_por_ano + 1
-            if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
-                anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
-                cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
-            else:
-                cuota_programada = cuota_mensual
+            cuota_programada = cuota_mensual
+
         abono_extra = abonos_dict.get(periodo, 0)
         pago_total_del_periodo = cuota_programada + abono_extra
 
         if (saldo_capital + interes_periodo) < pago_total_del_periodo:
             pago_total_del_periodo = saldo_capital + interes_periodo
 
-        flujos_realista.append(-pago_total_del_periodo)
         abono_a_capital = pago_total_del_periodo - interes_periodo
         saldo_capital -= abono_a_capital
 
-    df_flujo_realista = pd.DataFrame({
-        "Periodo": range(len(flujos_realista)),
-        "Flujo": flujos_realista,
-    })
-    
-    return df_flujo_para_tir, df_flujo_realista
+        tabla_amortizacion.append({
+            "Periodo": periodo,
+            "Flujo": -pago_total_del_periodo,
+            "Saldo Inicial": saldo_inicial_periodo,
+            "Pago Total": pago_total_del_periodo,
+            "Interés Pagado": interes_periodo,
+            "Abono a Capital": abono_a_capital,
+            "Saldo Final": saldo_capital if saldo_capital > 0.01 else 0.0
+        })
+
+    df_flujo_realista = pd.DataFrame(tabla_amortizacion)
+    df_periodo_cero = pd.DataFrame([{"Periodo": 0, "Flujo": monto_prestamo, "Saldo Inicial": 0, "Pago Total": 0, "Interés Pagado": 0, "Abono a Capital": 0, "Saldo Final": monto_prestamo}])
+    df_flujo_realista = pd.concat([df_periodo_cero, df_flujo_realista], ignore_index=True)
+    return df_flujo_para_tir, df_flujo_realista, tasa_periodica
 
 # --- Interfaz de Usuario con Streamlit ---
 
@@ -268,7 +277,7 @@ if calcular:
                 st.stop()
         
         # Generar los dos escenarios de flujo de caja
-        df_flujo_tir, df_flujo_realista = calcular_escenarios_flujo(
+        df_flujo_tir, df_flujo_realista, tasa_interes_prestamo = calcular_escenarios_flujo(
             monto_prestamo,
             duracion_anos,
             cuota_mensual,
@@ -302,6 +311,12 @@ if calcular:
                     tir_anual = (1 + tir_periodica) ** pagos_por_ano - 1
                     
                     st.metric(
+                        label=f"Tasa Interés Periódica (Préstamo)",
+                        value=f"{tasa_interes_prestamo:.4%}",
+                        help="Esta es la tasa de interés implícita por período (ej. mensual) calculada a partir del monto, cuota y plazo originales, antes de cualquier abono."
+                    )
+
+                    st.metric(
                         label=f"TIR Efectiva Anual ({pagos_por_ano} pagos/año)",
                         value=f"{tir_anual:.2%}"
                     )
@@ -315,8 +330,25 @@ if calcular:
             except ValueError as e:
                 st.warning(f"No se pudo calcular la TIR. Es posible que el flujo de caja no cambie de signo, lo que indica que la inversión nunca genera retornos positivos o siempre es rentable. Error: {e}")
 
-            st.subheader("Flujo de Caja Detallado")
-            st.dataframe(df_flujo_realista, height=400)
+            st.subheader("Tabla de Amortización Detallada")
+            columnas_mostrar = [
+                "Periodo", 
+                "Saldo Inicial", 
+                "Pago Total", 
+                "Interés Pagado", 
+                "Abono a Capital", 
+                "Saldo Final"
+            ]
+            st.dataframe(
+                df_flujo_realista[columnas_mostrar].style.format({
+                    "Saldo Inicial": "${:,.2f}",
+                    "Pago Total": "${:,.2f}",
+                    "Interés Pagado": "${:,.2f}",
+                    "Abono a Capital": "${:,.2f}",
+                    "Saldo Final": "${:,.2f}",
+                }),
+                height=400
+            )
 
         with col2:
             st.subheader("Gráfico del Flujo de Caja")
@@ -343,4 +375,3 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("Creado por ASTREO - Gustavo Llano.")
-
