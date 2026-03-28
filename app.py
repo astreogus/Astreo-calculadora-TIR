@@ -79,31 +79,37 @@ def calcular_escenarios_flujo(
     tabla_amortizacion = []
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
+    cuota_dinamica = cuota_mensual  # Esta cuota se recalculará con los abonos
 
-    for periodo in range(1, total_periodos_original + 2):
-        if saldo_capital < 0.01:
-            break
+    for periodo in range(1, total_periodos_original + 1):
+        # Aplicar ajuste por IPC a la cuota dinámica al inicio de cada año (después del período de gracia)
+        if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
+            ano_actual = ((periodo - 1) / pagos_por_ano) + 1
+            if ano_actual > anos_gracia_ipc:
+                cuota_dinamica *= (1 + incremento_ipc_anual)
 
         saldo_inicial_periodo = saldo_capital
+        # Si el saldo ya es cero, los cálculos futuros también serán cero.
+        if saldo_inicial_periodo < 0.01:
+            saldo_inicial_periodo = 0
+        
         interes_periodo = saldo_capital * tasa_periodica
 
-        # Determina la cuota programada para la simulación realista
-        ano_actual = (periodo - 1) / pagos_por_ano + 1
+        # Determinar la cuota base para este período
         if periodo in cuotas_diferentes:
-            cuota_programada = cuotas_diferentes[periodo]
+            pago_base_periodo = cuotas_diferentes[periodo]
         elif periodo in cuotas_porcentaje:
             porcentaje = cuotas_porcentaje[periodo]
-            cuota_programada = cuota_mensual * (porcentaje / 100.0)
-        elif ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
-            anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
-            cuota_programada = cuota_mensual * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
+            pago_base_periodo = cuota_mensual * (porcentaje / 100.0)
         else:
-            cuota_programada = cuota_mensual
+            pago_base_periodo = cuota_dinamica
 
         abono_extra = abonos_dict.get(periodo, 0)
-        pago_total_del_periodo = cuota_programada + abono_extra
+        pago_total_del_periodo = pago_base_periodo + abono_extra
 
-        if (saldo_capital + interes_periodo) < pago_total_del_periodo:
+        # El pago total no puede ser mayor que el saldo más intereses
+        # Y en el último período, debe ser exactamente el saldo más intereses para liquidar.
+        if pago_total_del_periodo > (saldo_inicial_periodo + interes_periodo) or periodo == total_periodos_original:
             pago_total_del_periodo = saldo_capital + interes_periodo
 
         abono_a_capital = pago_total_del_periodo - interes_periodo
@@ -118,6 +124,25 @@ def calcular_escenarios_flujo(
             "Abono a Capital": abono_a_capital,
             "Saldo Final": saldo_capital if saldo_capital > 0.01 else 0.0
         })
+
+        # Si se hizo un abono extra, recalcular la cuota dinámica para los períodos restantes
+        if abono_extra > 0:
+            periodos_restantes = total_periodos_original - periodo
+            if periodos_restantes > 0 and saldo_capital > 0.01:
+                try:
+                    if tasa_periodica > 0:
+                        # Fórmula de anualidad para recalcular el pago
+                        factor = (1 + tasa_periodica) ** periodos_restantes
+                        nueva_cuota = saldo_capital * (tasa_periodica * factor) / (factor - 1)
+                        cuota_dinamica = nueva_cuota
+                    else: # Caso sin interés
+                        cuota_dinamica = saldo_capital / periodos_restantes
+                except (OverflowError, ZeroDivisionError):
+                    # Fallback en caso de problemas numéricos
+                    cuota_dinamica = saldo_capital / periodos_restantes if periodos_restantes > 0 else 0
+            else:
+                # Si no quedan períodos o no hay saldo, la cuota futura es cero
+                cuota_dinamica = 0
 
     df_flujo_realista = pd.DataFrame(tabla_amortizacion)
     df_periodo_cero = pd.DataFrame([{"Periodo": 0, "Flujo": monto_prestamo, "Saldo Inicial": 0, "Pago Total": 0, "Interés Pagado": 0, "Abono a Capital": 0, "Saldo Final": monto_prestamo}])
@@ -293,9 +318,31 @@ if calcular:
             st.error("No se pudo calcular la tasa de interés implícita del préstamo. Verifique que las cuotas sean suficientes para pagar el crédito o que los parámetros sean consistentes.")
             st.stop()
 
+        total_periodos_original = int(round(duracion_anos * pagos_por_ano))
+        # Obtenemos el número real de períodos de la tabla de amortización generada
+        periodos_reales = 0
+        if not df_flujo_realista.empty:
+            # Get the max period number from the payment rows (Periodo > 0)
+            max_periodo_val = df_flujo_realista.loc[df_flujo_realista['Periodo'] > 0, 'Periodo'].max()
+            # .max() on an empty series returns NaN, so we check for it
+            if pd.notna(max_periodo_val):
+                periodos_reales = int(max_periodo_val)
+
         col1, col2 = st.columns([1, 2])
 
         with col1:
+            st.subheader("Análisis del Plazo")
+
+            # Solo mostramos este análisis si hay datos realistas para comparar
+            if periodos_reales > 0:
+                saldo_final_real = df_flujo_realista.iloc[-1]["Saldo Final"]
+                if periodos_reales < total_periodos_original:
+                    st.success(f"¡Pago anticipado! El crédito se liquida en {periodos_reales} períodos en vez de {total_periodos_original}, gracias a los pagos adicionales.")
+                elif periodos_reales == total_periodos_original and saldo_final_real > 0.01:
+                    st.warning(f"¡Atención! Al final de los {total_periodos_original} períodos, aún queda un saldo de ${saldo_final_real:,.2f}. La cuota base podría ser insuficiente.")
+                else:
+                    st.info(f"El crédito se liquida correctamente en el plazo planeado de {total_periodos_original} períodos.")
+
             st.subheader("Resultados")
             # Calcular el total de intereses pagados desde el flujo realista
             total_pagado = -df_flujo_realista.loc[df_flujo_realista['Periodo'] > 0, 'Flujo'].sum()
