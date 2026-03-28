@@ -80,13 +80,16 @@ def calcular_escenarios_flujo(
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
     cuota_dinamica = cuota_mensual  # Esta cuota se recalculará con los abonos
+    cuota_ha_sido_recalculada = False # Bandera para controlar el ajuste de IPC
 
     for periodo in range(1, total_periodos_original + 1):
         # Aplicar ajuste por IPC a la cuota dinámica al inicio de cada año (después del período de gracia)
-        if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
-            ano_actual = ((periodo - 1) / pagos_por_ano) + 1
-            if ano_actual > anos_gracia_ipc:
-                cuota_dinamica *= (1 + incremento_ipc_anual)
+        # Solo se aplica si la cuota no ha sido recalculada por un abono extraordinario.
+        if not cuota_ha_sido_recalculada:
+            if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
+                ano_actual = ((periodo - 1) / pagos_por_ano) + 1
+                if ano_actual > anos_gracia_ipc:
+                    cuota_dinamica *= (1 + incremento_ipc_anual)
 
         saldo_inicial_periodo = saldo_capital
         # Si el saldo ya es cero, los cálculos futuros también serán cero.
@@ -135,6 +138,7 @@ def calcular_escenarios_flujo(
                         factor = (1 + tasa_periodica) ** periodos_restantes
                         nueva_cuota = saldo_capital * (tasa_periodica * factor) / (factor - 1)
                         cuota_dinamica = nueva_cuota
+                        cuota_ha_sido_recalculada = True # Marcar que la cuota ahora es fija
                     else: # Caso sin interés
                         cuota_dinamica = saldo_capital / periodos_restantes
                 except (OverflowError, ZeroDivisionError):
