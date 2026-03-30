@@ -79,15 +79,10 @@ def calcular_escenarios_flujo(
     tabla_amortizacion = []
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
-    cuota_dinamica = cuota_mensual  # Esta cuota se recalculará con los abonos y se ajustará por IPC
+    # Esta es la cuota base que se recalculará. El pago de cada período se derivará de ella.
+    cuota_base_dinamica = cuota_mensual
 
     for periodo in range(1, total_periodos_original + 1):
-        # Aplicar ajuste por IPC a la cuota dinámica al inicio de cada año (después del período de gracia)
-        if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
-            ano_actual = ((periodo - 1) / pagos_por_ano) + 1
-            if ano_actual > anos_gracia_ipc:
-                cuota_dinamica *= (1 + incremento_ipc_anual)
-
         saldo_inicial_periodo = saldo_capital
 
         # Si el préstamo ya está pagado, rellenar los períodos restantes con ceros
@@ -109,14 +104,22 @@ def calcular_escenarios_flujo(
 
         interes_periodo = saldo_inicial_periodo * tasa_periodica
 
-        # Determinar la cuota base para este período
+        # Determinar la cuota base para este período, aplicando IPC a la cuota base dinámica
+        ano_actual = ((periodo - 1) / pagos_por_ano) + 1
+        anos_con_ajuste = 0
+        if ano_actual > anos_gracia_ipc and incremento_ipc_anual > 0:
+            # Se calcula el número de ajustes de IPC que han ocurrido hasta este período.
+            anos_con_ajuste = int(ano_actual - anos_gracia_ipc)
+        
+        pago_base_calculado = cuota_base_dinamica * ((1 + incremento_ipc_anual) ** anos_con_ajuste)
+
         if periodo in cuotas_diferentes:
             pago_base_periodo = cuotas_diferentes[periodo]
         elif periodo in cuotas_porcentaje:
             porcentaje = cuotas_porcentaje[periodo]
             pago_base_periodo = cuota_mensual * (porcentaje / 100.0)
         else:
-            pago_base_periodo = cuota_dinamica
+            pago_base_periodo = pago_base_calculado
 
         abono_extra_original = abonos_dict.get(periodo, 0)
         pago_total_del_periodo = pago_base_periodo + abono_extra_original
@@ -159,20 +162,36 @@ def calcular_escenarios_flujo(
         if abono_extra_original > 0:
             periodos_restantes = total_periodos_original - periodo
             if periodos_restantes > 0 and saldo_capital > 0:
-                try:
-                    if tasa_periodica > 0:
-                        # Fórmula de anualidad para recalcular el pago
-                        factor = (1 + tasa_periodica) ** periodos_restantes
-                        nueva_cuota = saldo_capital * (tasa_periodica * factor) / (factor - 1)
-                        cuota_dinamica = nueva_cuota
-                    else: # Caso sin interés
-                        cuota_dinamica = saldo_capital / periodos_restantes
-                except (OverflowError, ZeroDivisionError):
-                    # Fallback en caso de problemas numéricos
-                    cuota_dinamica = saldo_capital / periodos_restantes if periodos_restantes > 0 else 0
+                # Recalcular la cuota base para que el saldo restante se amortice exactamente
+                # en los períodos restantes, considerando los futuros ajustes de IPC.
+                
+                # Se calcula el valor presente de una anualidad de $1 que crece con el IPC.
+                pv_factor_sum = 0.0
+                for p_offset in range(1, periodos_restantes + 1):
+                    p_futuro = periodo + p_offset
+                    
+                    # Calcular el multiplicador de IPC para ese período futuro
+                    ano_futuro = ((p_futuro - 1) / pagos_por_ano) + 1
+                    anos_con_ajuste_futuro = 0
+                    if ano_futuro > anos_gracia_ipc and incremento_ipc_anual > 0:
+                        anos_con_ajuste_futuro = int(ano_futuro - anos_gracia_ipc)
+                    
+                    ipc_multiplier = (1 + incremento_ipc_anual) ** anos_con_ajuste_futuro
+                    
+                    # Descontar ese pago futuro al valor presente
+                    discount_factor = (1 + tasa_periodica) ** p_offset
+                    pv_factor_sum += ipc_multiplier / discount_factor
+
+                if pv_factor_sum > 0:
+                    # La nueva cuota base es el saldo dividido por la suma de factores de valor presente.
+                    # Esta nueva cuota base aún no tiene ningún ajuste de IPC.
+                    cuota_base_dinamica = saldo_capital / pv_factor_sum
+                else:
+                    cuota_base_dinamica = 0
+
             else:
                 # Si no quedan períodos o no hay saldo, la cuota futura es cero
-                cuota_dinamica = 0
+                cuota_base_dinamica = 0
 
     df_flujo_realista = pd.DataFrame(tabla_amortizacion)
     df_periodo_cero = pd.DataFrame([{"Periodo": 0, "Flujo": monto_prestamo, "Saldo Inicial": 0, 
