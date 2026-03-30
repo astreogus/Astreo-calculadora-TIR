@@ -79,17 +79,14 @@ def calcular_escenarios_flujo(
     tabla_amortizacion = []
     saldo_capital = monto_prestamo
     abonos_dict = dict(abonos_extraordinarios)
-    cuota_dinamica = cuota_mensual  # Esta cuota se recalculará con los abonos
-    cuota_ha_sido_recalculada = False # Bandera para controlar el ajuste de IPC
+    cuota_dinamica = cuota_mensual  # Esta cuota se recalculará con los abonos y se ajustará por IPC
 
     for periodo in range(1, total_periodos_original + 1):
         # Aplicar ajuste por IPC a la cuota dinámica al inicio de cada año (después del período de gracia)
-        # Solo se aplica si la cuota no ha sido recalculada por un abono extraordinario.
-        if not cuota_ha_sido_recalculada:
-            if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
-                ano_actual = ((periodo - 1) / pagos_por_ano) + 1
-                if ano_actual > anos_gracia_ipc:
-                    cuota_dinamica *= (1 + incremento_ipc_anual)
+        if (periodo - 1) > 0 and (periodo - 1) % pagos_por_ano == 0:
+            ano_actual = ((periodo - 1) / pagos_por_ano) + 1
+            if ano_actual > anos_gracia_ipc:
+                cuota_dinamica *= (1 + incremento_ipc_anual)
 
         saldo_inicial_periodo = saldo_capital
         # Si el saldo ya es cero, los cálculos futuros también serán cero.
@@ -107,13 +104,20 @@ def calcular_escenarios_flujo(
         else:
             pago_base_periodo = cuota_dinamica
 
-        abono_extra = abonos_dict.get(periodo, 0)
-        pago_total_del_periodo = pago_base_periodo + abono_extra
+        abono_extra_original = abonos_dict.get(periodo, 0)
+        pago_total_del_periodo = pago_base_periodo + abono_extra_original
+
+        # Guardar los valores para la tabla, que pueden ser ajustados si hay sobrepago
+        pago_cuota_tabla = pago_base_periodo
+        abono_extra_tabla = abono_extra_original
 
         # El pago total no puede ser mayor que el saldo más intereses
         # Y en el último período, debe ser exactamente el saldo más intereses para liquidar.
         if pago_total_del_periodo > (saldo_inicial_periodo + interes_periodo) or periodo == total_periodos_original:
             pago_total_del_periodo = saldo_capital + interes_periodo
+            # Ajustar componentes para la tabla para que la suma sea correcta
+            pago_cuota_tabla = min(pago_base_periodo, pago_total_del_periodo)
+            abono_extra_tabla = pago_total_del_periodo - pago_cuota_tabla
 
         abono_a_capital = pago_total_del_periodo - interes_periodo
         saldo_capital -= abono_a_capital
@@ -122,6 +126,8 @@ def calcular_escenarios_flujo(
             "Periodo": periodo,
             "Flujo": -pago_total_del_periodo,
             "Saldo Inicial": saldo_inicial_periodo,
+            "Pago Cuota": pago_cuota_tabla,
+            "Abono Extraordinario": abono_extra_tabla,
             "Pago Total": pago_total_del_periodo,
             "Interés Pagado": interes_periodo,
             "Abono a Capital": abono_a_capital,
@@ -129,7 +135,7 @@ def calcular_escenarios_flujo(
         })
 
         # Si se hizo un abono extra, recalcular la cuota dinámica para los períodos restantes
-        if abono_extra > 0:
+        if abono_extra_original > 0:
             periodos_restantes = total_periodos_original - periodo
             if periodos_restantes > 0 and saldo_capital > 0.01:
                 try:
@@ -138,7 +144,6 @@ def calcular_escenarios_flujo(
                         factor = (1 + tasa_periodica) ** periodos_restantes
                         nueva_cuota = saldo_capital * (tasa_periodica * factor) / (factor - 1)
                         cuota_dinamica = nueva_cuota
-                        cuota_ha_sido_recalculada = True # Marcar que la cuota ahora es fija
                     else: # Caso sin interés
                         cuota_dinamica = saldo_capital / periodos_restantes
                 except (OverflowError, ZeroDivisionError):
@@ -149,7 +154,10 @@ def calcular_escenarios_flujo(
                 cuota_dinamica = 0
 
     df_flujo_realista = pd.DataFrame(tabla_amortizacion)
-    df_periodo_cero = pd.DataFrame([{"Periodo": 0, "Flujo": monto_prestamo, "Saldo Inicial": 0, "Pago Total": 0, "Interés Pagado": 0, "Abono a Capital": 0, "Saldo Final": monto_prestamo}])
+    df_periodo_cero = pd.DataFrame([{"Periodo": 0, "Flujo": monto_prestamo, "Saldo Inicial": 0, 
+        "Pago Cuota": 0, "Abono Extraordinario": 0, "Pago Total": 0, 
+        "Interés Pagado": 0, "Abono a Capital": 0, "Saldo Final": monto_prestamo
+    }])
     df_flujo_realista = pd.concat([df_periodo_cero, df_flujo_realista], ignore_index=True)
     return df_flujo_para_tir, df_flujo_realista, tasa_periodica
 
@@ -385,6 +393,8 @@ if calcular:
             columnas_mostrar = [
                 "Periodo", 
                 "Saldo Inicial", 
+                "Pago Cuota",
+                "Abono Extraordinario",
                 "Pago Total", 
                 "Interés Pagado", 
                 "Abono a Capital", 
@@ -393,6 +403,8 @@ if calcular:
             st.dataframe(
                 df_flujo_realista[columnas_mostrar].style.format({
                     "Saldo Inicial": "${:,.2f}",
+                    "Pago Cuota": "${:,.2f}",
+                    "Abono Extraordinario": "${:,.2f}",
                     "Pago Total": "${:,.2f}",
                     "Interés Pagado": "${:,.2f}",
                     "Abono a Capital": "${:,.2f}",
