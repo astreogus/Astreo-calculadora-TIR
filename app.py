@@ -89,11 +89,25 @@ def calcular_escenarios_flujo(
                 cuota_dinamica *= (1 + incremento_ipc_anual)
 
         saldo_inicial_periodo = saldo_capital
-        # Si el saldo ya es cero, los cálculos futuros también serán cero.
+
+        # Si el préstamo ya está pagado, rellenar los períodos restantes con ceros
+        # para que la tabla siempre muestre el plazo original completo.
         if saldo_inicial_periodo < 0.01:
-            saldo_inicial_periodo = 0
-        
-        interes_periodo = saldo_capital * tasa_periodica
+            tabla_amortizacion.append({
+                "Periodo": periodo,
+                "Flujo": 0,
+                "Saldo Inicial": 0,
+                "Pago Cuota": 0,
+                "Abono Extraordinario": 0,
+                "Pago Total": 0,
+                "Interés Pagado": 0,
+                "Abono a Capital": 0,
+                "Saldo Final": 0
+            })
+            saldo_capital = 0  # Asegurarse de que se mantenga en cero
+            continue
+
+        interes_periodo = saldo_inicial_periodo * tasa_periodica
 
         # Determinar la cuota base para este período
         if periodo in cuotas_diferentes:
@@ -113,7 +127,7 @@ def calcular_escenarios_flujo(
 
         # El pago total no puede ser mayor que el saldo más intereses
         # Y en el último período, debe ser exactamente el saldo más intereses para liquidar.
-        if pago_total_del_periodo > (saldo_inicial_periodo + interes_periodo) or periodo == total_periodos_original:
+        if pago_total_del_periodo >= (saldo_inicial_periodo + interes_periodo) or periodo == total_periodos_original:
             pago_total_del_periodo = saldo_capital + interes_periodo
             # Ajustar componentes para la tabla para que la suma sea correcta
             pago_cuota_tabla = min(pago_base_periodo, pago_total_del_periodo)
@@ -331,14 +345,13 @@ if calcular:
             st.stop()
 
         total_periodos_original = int(round(duracion_anos * pagos_por_ano))
-        # Obtenemos el número real de períodos de la tabla de amortización generada
+        # Obtenemos el número real de períodos en los que hubo un pago.
         periodos_reales = 0
         if not df_flujo_realista.empty:
-            # Get the max period number from the payment rows (Periodo > 0)
-            max_periodo_val = df_flujo_realista.loc[df_flujo_realista['Periodo'] > 0, 'Periodo'].max()
-            # .max() on an empty series returns NaN, so we check for it
-            if pd.notna(max_periodo_val):
-                periodos_reales = int(max_periodo_val)
+            # Encuentra el último período donde se realizó un pago real.
+            df_con_pagos = df_flujo_realista[df_flujo_realista['Pago Total'] > 0.01]
+            if not df_con_pagos.empty:
+                periodos_reales = int(df_con_pagos['Periodo'].max())
 
         col1, col2 = st.columns([1, 2])
 
