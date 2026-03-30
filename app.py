@@ -158,7 +158,7 @@ def calcular_escenarios_flujo(
         # Si se hizo un abono extra, recalcular la cuota dinámica para los períodos restantes
         if abono_extra_original > 0:
             periodos_restantes = total_periodos_original - periodo
-            if periodos_restantes > 0 and saldo_capital > 0.01:
+            if periodos_restantes > 0 and saldo_capital > 0:
                 try:
                     if tasa_periodica > 0:
                         # Fórmula de anualidad para recalcular el pago
@@ -367,10 +367,8 @@ if calcular:
 
             # Solo mostramos este análisis si hay datos realistas para comparar
             if periodos_reales > 0:
-                saldo_final_real = df_flujo_realista.iloc[-1]["Saldo Final"]
-                if periodos_reales < total_periodos_original:
-                    st.success(f"¡Pago anticipado! El crédito se liquida en {periodos_reales} períodos en vez de {total_periodos_original}, gracias a los pagos adicionales.")
-                elif periodos_reales == total_periodos_original and saldo_final_real > 0.01:
+                saldo_final_real = df_flujo_realista.iloc[-1]["Saldo Final"]                
+                if periodos_reales == total_periodos_original and saldo_final_real > 0.01:
                     st.warning(f"¡Atención! Al final de los {total_periodos_original} períodos, aún queda un saldo de ${saldo_final_real:,.2f}. La cuota base podría ser insuficiente.")
                 else:
                     st.info(f"El crédito se liquida correctamente en el plazo planeado de {total_periodos_original} períodos.")
