@@ -125,11 +125,18 @@ def calcular_escenarios_flujo(
         pago_cuota_tabla = pago_base_periodo
         abono_extra_tabla = abono_extra_original
 
-        # El pago total no puede ser mayor que el saldo más intereses
-        # Y en el último período, debe ser exactamente el saldo más intereses para liquidar.
-        if pago_total_del_periodo >= (saldo_inicial_periodo + interes_periodo) or periodo == total_periodos_original:
-            pago_total_del_periodo = saldo_capital + interes_periodo
-            # Ajustar componentes para la tabla para que la suma sea correcta
+        # Lógica para asegurar que el crédito dure exactamente el plazo estipulado.
+        # Si un pago intenta liquidar el crédito antes del último período, se ajusta
+        # para dejar un saldo mínimo y forzar la continuación de los pagos.
+        if periodo < total_periodos_original:
+            # Si el pago es mayor o igual a lo que se debe, se ajusta para no liquidar.
+            if pago_total_del_periodo >= saldo_inicial_periodo + interes_periodo:
+                pago_total_del_periodo = (saldo_inicial_periodo + interes_periodo) - 0.01
+                pago_cuota_tabla = min(pago_base_periodo, pago_total_del_periodo)
+                abono_extra_tabla = pago_total_del_periodo - pago_cuota_tabla
+        else: # Es el último período (periodo == total_periodos_original)
+            # El pago final debe ser exactamente el saldo pendiente para liquidar a cero.
+            pago_total_del_periodo = saldo_inicial_periodo + interes_periodo
             pago_cuota_tabla = min(pago_base_periodo, pago_total_del_periodo)
             abono_extra_tabla = pago_total_del_periodo - pago_cuota_tabla
 
