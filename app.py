@@ -405,23 +405,31 @@ if calcular:
                 else:
                     # Fórmula de anualización de la tasa periódica
                     tir_anual = (1 + tir_periodica) ** pagos_por_ano - 1
+                    # Tasa de interés anualizada del préstamo original
+                    tasa_anual_prestamo = (1 + tasa_interes_prestamo) ** pagos_por_ano - 1
                     
                     st.metric(
-                        label=f"Tasa Interés Periódica (Préstamo)",
+                        label=f"Tasa Interés Periódica (del Préstamo)",
                         value=f"{tasa_interes_prestamo:.4%}",
                         help="Esta es la tasa de interés implícita por período (ej. mensual) calculada a partir del monto, cuota y plazo originales, antes de cualquier abono."
                     )
 
                     st.metric(
-                        label=f"TIR Efectiva Anual ({pagos_por_ano} pagos/año)",
-                        value=f"{tir_anual:.2%}"
+                        label=f"Tasa Interés Efectiva Anual (del Préstamo)",
+                        value=f"{tasa_anual_prestamo:.2%}",
+                        help="Es la tasa de interés del préstamo original, anualizada según la frecuencia de pagos."
+                    )
+                    st.metric(
+                        label=f"TIR Efectiva Anual (del Flujo de Caja)",
+                        value=f"{tir_anual:.2%}",
+                        help="Es la Tasa Interna de Retorno de todo el flujo de caja, incluyendo abonos extraordinarios. Puede subir con abonos, reflejando el 'costo' financiero de pagar antes."
                     )
                     st.metric(
                         label="Total Intereses Pagados",
                         value=f"${total_intereses:,.2f}",
                         help="Suma de todas las cuotas y abonos menos el monto del préstamo inicial. Un abono extraordinario debería reducir este valor."
                     )
-                    st.info(f"La TIR periódica (base para el cálculo) es de {tir_periodica:.4%}.")
+                    st.info(f"La TIR periódica (base para el cálculo del flujo de caja) es de {tir_periodica:.4%}.")
 
             except ValueError as e:
                 st.warning(f"No se pudo calcular la TIR. Es posible que el flujo de caja no cambie de signo, lo que indica que la inversión nunca genera retornos positivos o siempre es rentable. Error: {e}")
